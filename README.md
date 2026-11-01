@@ -9,7 +9,8 @@ A private Android app for storing personal documents such as Aadhaar, PAN, passp
 - On-device text reading (ML Kit bundled model) for searching inside photos
 - Detects common Indian documents and fills in numbers, names and expiry dates
 - Expiry alerts 30, 7 and 1 days before a document expires
-- Family profiles
+- Family profiles with encrypted photos
+- Optional bulk import that finds documents among gallery photos on the device
 - Password-protected backup and restore
 - Optional WhatsApp reminder button that opens a chat with the dates typed in
 - Screenshots blocked, with auto-lock after 60 seconds

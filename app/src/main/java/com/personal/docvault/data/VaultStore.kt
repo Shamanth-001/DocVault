@@ -39,30 +39,47 @@ class VaultStore(private val root: File, private val wrapper: KeyWrapper) {
     private var vaultKey: ByteArray? = null
     private var items = mutableListOf<Doc>()
     private var people = mutableListOf(Profile.default)
+    private var scanned = mutableSetOf<String>()
 
     val exists get() = headerFile.exists()
     val isOpen get() = vaultKey != null
     val docs: List<Doc> get() = items.toList()
     val profiles: List<Profile> get() = people.toList()
 
-    private class Index(val docs: MutableList<Doc>, val profiles: MutableList<Profile>)
+    /** Gallery photos already looked at, so a later scan only covers new ones. */
+    val scannedPhotos: Set<String> get() = scanned.toSet()
+
+    fun markScanned(keys: Collection<String>) {
+        scanned.addAll(keys)
+        saveIndex()
+    }
+
+    private class Index(
+        val docs: MutableList<Doc>,
+        val profiles: MutableList<Profile>,
+        val scanned: MutableSet<String>,
+    )
 
     /** Older vaults and backups saved a plain list of documents, with no family profiles. */
     private fun parseIndex(json: String): Index {
         val text = json.trim()
         val docs: JSONArray
         val saved: JSONArray?
+        val photos: JSONArray?
         if (text.startsWith("[")) {
             docs = JSONArray(text)
             saved = null
+            photos = null
         } else {
             val o = JSONObject(text)
             docs = o.getJSONArray("docs")
             saved = o.optJSONArray("profiles")
+            photos = o.optJSONArray("scanned")
         }
         val list = MutableList(saved?.length() ?: 0) { Profile.fromJson(saved!!.getJSONObject(it)) }
         if (list.none { it.id == Profile.ME }) list.add(0, Profile.default)
-        return Index(MutableList(docs.length()) { Doc.fromJson(docs.getJSONObject(it)) }, list)
+        val seen = MutableList(photos?.length() ?: 0) { photos!!.getString(it) }.toMutableSet()
+        return Index(MutableList(docs.length()) { Doc.fromJson(docs.getJSONObject(it)) }, list, seen)
     }
 
     private fun enc(b: ByteArray) = Base64.getEncoder().encodeToString(b)
@@ -119,6 +136,7 @@ class VaultStore(private val root: File, private val wrapper: KeyWrapper) {
         vaultKey = key
         items = mutableListOf()
         people = mutableListOf(Profile.default)
+        scanned = mutableSetOf()
         saveIndex()
         writeHeader(header)
     }
@@ -136,6 +154,7 @@ class VaultStore(private val root: File, private val wrapper: KeyWrapper) {
         val index = parseIndex(String(Crypto.open(key, indexFile.readBytes())))
         items = index.docs
         people = index.profiles
+        scanned = index.scanned
         vaultKey = key
     }
 
@@ -152,6 +171,7 @@ class VaultStore(private val root: File, private val wrapper: KeyWrapper) {
         vaultKey = null
         items = mutableListOf()
         people = mutableListOf(Profile.default)
+        scanned = mutableSetOf()
     }
 
     private fun requireKey() = vaultKey ?: throw IllegalStateException("Vault is locked")
@@ -161,7 +181,9 @@ class VaultStore(private val root: File, private val wrapper: KeyWrapper) {
         items.forEach { docs.put(it.toJson()) }
         val profiles = JSONArray()
         people.forEach { profiles.put(it.toJson()) }
-        val index = JSONObject().put("docs", docs).put("profiles", profiles)
+        val photos = JSONArray()
+        scanned.forEach { photos.put(it) }
+        val index = JSONObject().put("docs", docs).put("profiles", profiles).put("scanned", photos)
         writeAtomic(indexFile, Crypto.seal(requireKey(), index.toString().toByteArray()))
     }
 
@@ -189,10 +211,25 @@ class VaultStore(private val root: File, private val wrapper: KeyWrapper) {
         saveIndex()
     }
 
+    /** Pass a blank [blobId] to remove the photo. The old photo's file is always deleted. */
+    fun setProfilePhoto(id: String, blobId: String) {
+        val i = people.indexOfFirst { it.id == id }
+        if (i < 0) {
+            if (blobId.isNotBlank()) deleteBlob(blobId)
+            return
+        }
+        val old = people[i].photo
+        people[i] = people[i].copy(photo = blobId)
+        saveIndex()
+        if (old.isNotBlank() && old != blobId) deleteBlob(old)
+    }
+
     /** Removes a person only. Their documents move to Me, so nothing is ever lost this way. */
     fun deleteProfile(id: String) {
         require(id != Profile.ME) { "Me can't be removed." }
+        val photo = people.firstOrNull { it.id == id }?.photo.orEmpty()
         people.removeAll { it.id == id }
+        if (photo.isNotBlank()) deleteBlob(photo)
         items = items.map { if (it.profile == id) it.copy(profile = Profile.ME) else it }.toMutableList()
         saveIndex()
     }
@@ -245,7 +282,8 @@ class VaultStore(private val root: File, private val wrapper: KeyWrapper) {
             val backupHeader = JSONObject().put("version", 1).put("password", header.getJSONObject("password"))
             add("header.json", backupHeader.toString().toByteArray())
             add("index.enc", indexFile.readBytes())
-            val referenced = items.flatMap { d -> d.attachments.map { it.blobId } }
+            val referenced = items.flatMap { d -> d.attachments.map { it.blobId } } +
+                people.map { it.photo }.filter(String::isNotBlank)
             referenced.forEach { add("blobs/$it.enc", File(blobDir, "$it.enc").readBytes()) }
         }
     }

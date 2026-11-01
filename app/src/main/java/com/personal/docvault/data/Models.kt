@@ -17,15 +17,20 @@ data class Attachment(
 data class CustomField(val label: String, val value: String)
 
 /** A family member. "Me" always exists and can be renamed but not removed. */
-data class Profile(val id: String, val name: String) {
-    fun toJson(): JSONObject = JSONObject().put("id", id).put("name", name)
+data class Profile(
+    val id: String,
+    val name: String,
+    /** Encrypted blob holding this person's photo, or blank to show their initial. */
+    val photo: String = "",
+) {
+    fun toJson(): JSONObject = JSONObject().put("id", id).put("name", name).put("photo", photo)
 
     companion object {
         const val ME = "me"
         val default = Profile(ME, "Me")
         const val MAX_NAME = 20
 
-        fun fromJson(o: JSONObject) = Profile(o.getString("id"), o.getString("name"))
+        fun fromJson(o: JSONObject) = Profile(o.getString("id"), o.getString("name"), o.optString("photo"))
     }
 }
 

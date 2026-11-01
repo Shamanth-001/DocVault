@@ -224,7 +224,10 @@ fun EditScreen(vm: VaultVm, id: String?) {
                 Spacer(Modifier.height(4.dp))
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     vm.profiles.forEach { p ->
-                        FilterChip(profile == p.id, { profile = p.id }, { Text(p.name) })
+                        FilterChip(
+                            profile == p.id, { profile = p.id }, { Text(p.name) },
+                            leadingIcon = { Avatar(vm, p, 24) },
+                        )
                     }
                 }
                 Spacer(Modifier.height(16.dp))

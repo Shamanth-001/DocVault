@@ -164,7 +164,23 @@ fun ViewScreen(vm: VaultVm, id: String) {
             Spacer(Modifier.height(16.dp))
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    if (vm.profiles.size > 1) DetailRow("Belongs to", vm.profileName(doc.profile))
+                    if (vm.profiles.size > 1) {
+                        val owner = vm.profiles.firstOrNull { it.id == doc.profile }
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            owner?.let { Avatar(vm, it, 36) }
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    "Belongs to", style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(vm.profileName(doc.profile), style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
                     if (doc.number.isNotBlank()) {
                         DetailRow(
                             cat.numberLabel,

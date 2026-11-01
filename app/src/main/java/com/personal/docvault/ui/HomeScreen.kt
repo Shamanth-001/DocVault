@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -56,6 +57,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.personal.docvault.Route
 import com.personal.docvault.VaultVm
 import com.personal.docvault.data.Doc
@@ -87,6 +89,23 @@ fun BlobImage(
     val bitmap by produceState<android.graphics.Bitmap?>(null, blobId, maxSide) { value = vm.bitmap(blobId, maxSide) }
     bitmap?.let { Image(it.asImageBitmap(), "Document photo", modifier, contentScale = scale) }
         ?: Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant))
+}
+
+/** A person's photo, or their first initial if they don't have one. */
+@Composable
+fun Avatar(vm: VaultVm, profile: Profile, size: Int, modifier: Modifier = Modifier) {
+    val shape = modifier.size(size.dp).clip(CircleShape)
+    if (profile.photo.isNotBlank()) {
+        BlobImage(vm, profile.photo, 256, shape)
+    } else {
+        Box(shape.background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+            Text(
+                profile.name.take(1).uppercase(),
+                fontSize = (size * 0.46f).sp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
 }
 
 @Composable
@@ -216,7 +235,10 @@ fun HomeScreen(vm: VaultVm) {
                     FilterChip(active == null, { vm.activeProfile = null; filter = null }, { Text("Everyone") })
                 }
                 items(vm.profiles, key = { it.id }) { p ->
-                    FilterChip(active == p.id, { vm.activeProfile = p.id; filter = null }, { Text(p.name) })
+                    FilterChip(
+                        active == p.id, { vm.activeProfile = p.id; filter = null }, { Text(p.name) },
+                        leadingIcon = { Avatar(vm, p, 24) },
+                    )
                 }
                 item {
                     AssistChip(

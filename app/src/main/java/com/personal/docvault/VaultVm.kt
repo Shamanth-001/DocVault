@@ -20,8 +20,10 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.personal.docvault.data.Attachment
+import com.personal.docvault.data.Detector
 import com.personal.docvault.data.Doc
 import com.personal.docvault.data.KeystoreWrapper
+import com.personal.docvault.data.PersonMatcher
 import com.personal.docvault.data.Profile
 import com.personal.docvault.data.Reminders
 import com.personal.docvault.data.VaultStore
@@ -31,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONException
@@ -38,9 +41,30 @@ import java.io.File
 
 enum class Phase { Setup, Locked, Open }
 
+enum class BulkStage { Intro, Folders, Scanning, Review, Importing, Done }
+
+class BulkFolder(val name: String, val count: Int, val selected: Boolean)
+
+/** One photo found by a scan. The photo stays in the gallery until the user imports it. */
+data class BulkItem(
+    val key: String,
+    val uri: Uri,
+    val text: String,
+    val category: String,
+    val number: String?,
+    val holder: String?,
+    val expiry: String?,
+    val profile: String,
+    /** True when the name on the document matched someone in the family. */
+    val matched: Boolean,
+    val selected: Boolean,
+    val note: String? = null,
+)
+
 sealed interface Route {
     data object Home : Route
     data object Settings : Route
+    data object BulkImport : Route
     data class View(val id: String) : Route
     data class Edit(val id: String?) : Route
     data class Zoom(val blobId: String) : Route
@@ -178,6 +202,185 @@ class VaultVm(app: Application) : AndroidViewModel(app) {
 
     fun profileName(id: String) = profiles.firstOrNull { it.id == id }?.name ?: Profile.default.name
 
+    // Bulk import. Nothing here runs until the user starts it from Settings.
+    var bulkStage by mutableStateOf(BulkStage.Intro)
+        private set
+    var bulkFolders by mutableStateOf(emptyList<BulkFolder>())
+        private set
+    var bulkIncludeOld by mutableStateOf(false)
+    var bulkDone by mutableStateOf(0)
+        private set
+    var bulkTotal by mutableStateOf(0)
+        private set
+    var bulkFailed by mutableStateOf(0)
+        private set
+    val bulkItems = mutableStateListOf<BulkItem>()
+    private var galleryPhotos = emptyList<GalleryPhoto>()
+    private var scanJob: Job? = null
+    private val photosLookedAt = mutableListOf<String>()
+
+    fun bulkReset() {
+        scanJob?.cancel()
+        scanJob = null
+        bulkPreview = null
+        bulkItems.clear()
+        photosLookedAt.clear()
+        galleryPhotos = emptyList()
+        bulkFolders = emptyList()
+        bulkDone = 0
+        bulkTotal = 0
+        bulkFailed = 0
+        bulkStage = BulkStage.Intro
+    }
+
+    fun bulkLoadFolders() = work("Finding your photos") {
+        val photos = importer.galleryPhotos()
+        galleryPhotos = photos
+        bulkFolders = photos.groupBy { it.folder }
+            .map { (name, list) -> BulkFolder(name, list.size, name.isLikelyDocumentFolder()) }
+            .sortedByDescending { it.count }
+        bulkStage = BulkStage.Folders
+    }
+
+    private fun String.isLikelyDocumentFolder() =
+        Regex("(?i)camera|whatsapp|document|download|screenshot|scan").containsMatchIn(this)
+
+    fun bulkToggleFolder(name: String) {
+        bulkFolders = bulkFolders.map {
+            if (it.name == name) BulkFolder(it.name, it.count, !it.selected) else it
+        }
+    }
+
+    fun bulkScanSelectedFolders() {
+        val chosen = bulkFolders.filter { it.selected }.map { it.name }.toSet()
+        val skip = if (bulkIncludeOld) emptySet() else store.scannedPhotos
+        val photos = galleryPhotos.filter { it.folder in chosen && it.key !in skip }
+        if (photos.isEmpty()) {
+            toast = "No new photos in those folders."
+            return
+        }
+        scan(photos)
+    }
+
+    fun bulkScanPicked(uris: List<Uri>) {
+        scan(uris.map { GalleryPhoto(it.toString(), it, "Picked") })
+    }
+
+    /** Every family member's known names: their profile name and names on their documents. */
+    private fun knownNames() = profiles.associate { p ->
+        p.id to (listOf(p.name) + docs.filter { it.profile == p.id }.map { it.holder }.filter(String::isNotBlank)).distinct()
+    }
+
+    private fun scan(photos: List<GalleryPhoto>) {
+        bulkItems.clear()
+        photosLookedAt.clear()
+        bulkDone = 0
+        bulkTotal = photos.size
+        bulkStage = BulkStage.Scanning
+        val known = knownNames()
+        val fallback = activeProfile ?: Profile.ME
+        val numbers = docs.map { it.number.filterNot(Char::isWhitespace) }.filter(String::isNotBlank).toMutableSet()
+
+        scanJob = viewModelScope.launch(Dispatchers.Default) {
+            for (photo in photos) {
+                if (!isActive) break
+                val text = runCatching { importer.scanText(photo.uri) }.getOrDefault("")
+                val found = Detector.classify(text)
+                if (found != null) {
+                    val person = PersonMatcher.suggest(found.holder, text, known)
+                    val clean = found.number?.filterNot(Char::isWhitespace)
+                    val duplicate = clean != null && !numbers.add(clean)
+                    val item = BulkItem(
+                        key = photo.key, uri = photo.uri, text = text, category = found.category,
+                        number = found.number, holder = found.holder, expiry = found.expiry,
+                        profile = person ?: fallback, matched = person != null,
+                        selected = found.confident && !duplicate,
+                        note = if (duplicate) "Already saved" else null,
+                    )
+                    withContext(Dispatchers.Main) { bulkItems.add(item) }
+                }
+                photosLookedAt += photo.key
+                bulkDone += 1
+            }
+            withContext(Dispatchers.Main) { bulkStage = BulkStage.Review }
+        }
+    }
+
+    /** Stops early and keeps whatever has been found so far. */
+    fun bulkStopScan() {
+        scanJob?.cancel()
+        bulkStage = BulkStage.Review
+    }
+
+    fun bulkUpdate(key: String, change: (BulkItem) -> BulkItem) {
+        val i = bulkItems.indexOfFirst { it.key == key }
+        if (i >= 0) bulkItems[i] = change(bulkItems[i])
+    }
+
+    /** Assigns everything sharing a printed name to one person in a single tap. */
+    fun bulkAssign(groupKey: String, profile: String, matched: Boolean = false) {
+        bulkItems.forEachIndexed { i, item ->
+            if (PersonMatcher.groupKey(item.holder.orEmpty()) == groupKey) {
+                bulkItems[i] = item.copy(profile = profile, matched = matched)
+            }
+        }
+    }
+
+    /** Whether a printed name is already one of the family's profile names. */
+    fun bulkNameIsProfile(groupKey: String) = profiles.any { PersonMatcher.groupKey(it.name) == groupKey }
+
+    /** Makes a family member from a name found on a document, and gives them that group. */
+    fun bulkAddPerson(groupKey: String, printedName: String) = work(null) {
+        val created = store.addProfile(PersonMatcher.displayName(printedName))
+        refresh()
+        withContext(Dispatchers.Main) { bulkAssign(groupKey, created.id, matched = true) }
+    }
+
+    /** The photo shown while a thumbnail is being held down. */
+    var bulkPreview by mutableStateOf<Uri?>(null)
+
+    suspend fun bulkPreviewBitmap(uri: Uri) = withContext(Dispatchers.IO) { importer.preview(uri) }
+
+    fun bulkImport() {
+        val chosen = bulkItems.filter { it.selected }
+        val looked = photosLookedAt.filterNot { it.startsWith("content:") }
+        bulkDone = 0
+        bulkTotal = chosen.size
+        bulkFailed = 0
+        bulkStage = BulkStage.Importing
+        viewModelScope.launch {
+            withContext(io) {
+                for (item in chosen) {
+                    runCatching {
+                        val added = importer.image(item.uri, knownText = item.text)
+                        val now = System.currentTimeMillis()
+                        store.upsert(
+                            Doc(
+                                id = java.util.UUID.randomUUID().toString(),
+                                category = item.category,
+                                title = com.personal.docvault.ui.categoryOf(item.category).label,
+                                profile = item.profile,
+                                holder = item.holder.orEmpty(),
+                                number = item.number.orEmpty(),
+                                expiry = item.expiry.orEmpty(),
+                                attachments = added.attachments,
+                                photoText = item.text,
+                                createdAt = now,
+                                updatedAt = now,
+                            ),
+                        )
+                    }.onFailure { bulkFailed += 1 }
+                    bulkDone += 1
+                }
+                store.markScanned(looked)
+                refresh()
+            }
+            bulkStage = BulkStage.Done
+        }
+    }
+
+    fun bulkThumbnail(uri: Uri) = importer.thumbnail(uri)
+
     fun addProfile(name: String) = work(null) {
         val created = store.addProfile(name)
         refresh()
@@ -186,6 +389,16 @@ class VaultVm(app: Application) : AndroidViewModel(app) {
 
     fun renameProfile(id: String, name: String) = work(null) {
         store.renameProfile(id, name)
+        refresh()
+    }
+
+    fun setProfilePhoto(id: String, uri: Uri) = work("Saving photo") {
+        store.setProfilePhoto(id, importer.profilePhoto(uri))
+        refresh()
+    }
+
+    fun removeProfilePhoto(id: String) = work(null) {
+        store.setProfilePhoto(id, "")
         refresh()
     }
 
@@ -258,6 +471,7 @@ class VaultVm(app: Application) : AndroidViewModel(app) {
     fun lock() {
         lockJob?.cancel()
         backgroundedAt = 0L
+        bulkReset()
         viewModelScope.launch(io) {
             store.lock()
             thumbs.evictAll()

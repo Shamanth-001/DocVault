@@ -45,10 +45,13 @@ fun App(vm: VaultVm) {
                 Phase.Locked -> LockedScreen(vm)
                 Phase.Open -> {
                     val route = vm.stack.last()
-                    BackHandler(enabled = vm.stack.size > 1 && route !is Route.Edit) { vm.back() }
+                    BackHandler(enabled = vm.stack.size > 1 && route !is Route.Edit && route !is Route.BulkImport) {
+                        vm.back()
+                    }
                     when (route) {
                         Route.Home -> HomeScreen(vm)
                         Route.Settings -> SettingsScreen(vm)
+                        Route.BulkImport -> BulkImportScreen(vm)
                         is Route.View -> ViewScreen(vm, route.id)
                         is Route.Edit -> EditScreen(vm, route.id)
                         is Route.Zoom -> ZoomScreen(vm, route.blobId)

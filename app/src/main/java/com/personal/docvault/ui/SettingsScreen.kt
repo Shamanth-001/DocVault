@@ -4,7 +4,10 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +25,7 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +53,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.personal.docvault.MainActivity
 import com.personal.docvault.Notifier
+import com.personal.docvault.Route
 import com.personal.docvault.VaultVm
 import com.personal.docvault.data.Profile
 import java.time.LocalDate
@@ -72,6 +77,12 @@ fun SettingsScreen(vm: VaultVm) {
     val pickBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         vm.externalActivity = false
         restoreUri = uri
+    }
+    var photoFor by remember { mutableStateOf<String?>(null) }
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        vm.externalActivity = false
+        val id = photoFor
+        if (uri != null && id != null) vm.setProfilePhoto(id, uri)
     }
 
     Scaffold(
@@ -113,6 +124,14 @@ fun SettingsScreen(vm: VaultVm) {
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${activity.packageName}")),
                 )
             }
+            Action(
+                Icons.Filled.PhotoLibrary,
+                "Bulk import",
+                "Optional. Finds documents among your photos, and you choose what to keep.",
+            ) {
+                vm.bulkReset()
+                vm.navigate(Route.BulkImport)
+            }
             Action(Icons.Filled.Backup, "Back up my documents", "Saves one encrypted file. Keep a copy off this phone, such as in Drive or on your laptop.") {
                 vm.externalActivity = true
                 createBackup.launch("DocVault-backup-${LocalDate.now()}.dvault")
@@ -129,11 +148,32 @@ fun SettingsScreen(vm: VaultVm) {
             Text("Family profiles", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             vm.profiles.forEach { p ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(p.name, Modifier.weight(1f))
-                    TextButton({ renamingProfile = p }) { Text("Rename") }
-                    if (p.id != Profile.ME) {
-                        TextButton({ removingProfile = p }) { Text("Remove") }
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(
+                        vm, p, 52,
+                        Modifier.clickable {
+                            photoFor = p.id
+                            vm.externalActivity = true
+                            pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(p.name, style = MaterialTheme.typography.titleMedium)
+                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            TextButton({
+                                photoFor = p.id
+                                vm.externalActivity = true
+                                pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }) { Text(if (p.photo.isBlank()) "Add photo" else "Change photo") }
+                            if (p.photo.isNotBlank()) {
+                                TextButton({ vm.removeProfilePhoto(p.id) }) { Text("Remove photo") }
+                            }
+                            TextButton({ renamingProfile = p }) { Text("Rename") }
+                            if (p.id != Profile.ME) {
+                                TextButton({ removingProfile = p }) { Text("Remove") }
+                            }
+                        }
                     }
                 }
             }

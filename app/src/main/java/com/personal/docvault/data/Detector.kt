@@ -12,8 +12,77 @@ data class Detected(
     val expiry: String? = null,
 )
 
+/** A gallery photo that looks like a document. [confident] means a known card or paper was found. */
+data class Classified(
+    val category: String,
+    val number: String?,
+    val holder: String?,
+    val expiry: String?,
+    val confident: Boolean,
+)
+
 /** Works out what kind of Indian document some recognised text came from. */
 object Detector {
+    private val BILL_WORDS = listOf(
+        "TAX INVOICE", "INVOICE", "BILL NO", "RECEIPT", "GSTIN", "TOTAL AMOUNT", "GRAND TOTAL",
+        "AMOUNT PAID", "CASH MEMO", "WARRANTY", "HSN",
+    )
+    private val EDUCATION_WORDS = listOf(
+        "UNIVERSITY", "MARKS CARD", "MARKSHEET", "MARK SHEET", "DEGREE CERTIFICATE", "ROLL NO",
+        "REGISTER NO", "BOARD OF SECONDARY", "HALL TICKET", "TRANSFER CERTIFICATE", "BONAFIDE",
+    )
+    private val MEDICAL_WORDS = listOf(
+        "PRESCRIPTION", "PATIENT NAME", "DIAGNOSIS", "LAB REPORT", "DISCHARGE SUMMARY",
+        "BLOOD GROUP", "VACCINATION CERTIFICATE",
+    )
+    private val PROPERTY_WORDS = listOf(
+        "SALE DEED", "RENTAL AGREEMENT", "RENT AGREEMENT", "LEASE AGREEMENT", "KHATA", "ENCUMBRANCE",
+    )
+    private val NAME_LABEL = Regex(
+        "(?i)^(?:name|insured\\s*name|name\\s*of\\s*(?:the\\s*)?(?:insured|student|candidate|patient|holder)|" +
+            "patient\\s*name|student\\s*name|candidate\\s*name|customer\\s*name|holder'?s?\\s*name)" +
+            "\\s*[:\\-]?\\s*(.*)$",
+    )
+
+    /** Decides whether a gallery photo is worth showing for import, or null for everyday photos. */
+    fun classify(text: String): Classified? {
+        if (text.length < 20) return null
+        val d = detect(text)
+        val holder = d.holder ?: passportName(text) ?: labelledName(text)
+        d.category?.let { return Classified(it, d.number, holder, d.expiry, confident = true) }
+
+        val upper = text.uppercase()
+        fun hits(words: List<String>) = words.count { it in upper }
+        val guess = when {
+            hits(BILL_WORDS) >= 2 -> "bills"
+            hits(EDUCATION_WORDS) >= 1 -> "education"
+            hits(MEDICAL_WORDS) >= 1 -> "medical"
+            hits(PROPERTY_WORDS) >= 1 -> "property"
+            else -> return null
+        }
+        return Classified(guess, null, holder, d.expiry, confident = false)
+    }
+
+    private fun labelledName(text: String): String? {
+        val lines = text.lines().map { it.trim() }
+        lines.forEachIndexed { i, line ->
+            val rest = NAME_LABEL.find(line)?.groupValues?.get(1)?.trim() ?: return@forEachIndexed
+            val candidate = rest.ifBlank { lines.getOrNull(i + 1).orEmpty() }
+            if (looksLikeName(candidate)) return candidate
+        }
+        return null
+    }
+
+    private fun passportName(text: String): String? {
+        val line = text.lines().map { it.filterNot(Char::isWhitespace).uppercase() }
+            .firstOrNull { it.startsWith("P<IND") } ?: return null
+        val parts = line.removePrefix("P<IND").split("<<").filter { it.isNotBlank() }
+        if (parts.isEmpty()) return null
+        val surname = parts[0].replace('<', ' ')
+        val given = parts.getOrNull(1)?.replace('<', ' ').orEmpty()
+        return "$given $surname".trim().takeIf(::looksLikeName)
+    }
+
     private val PAN = Regex("\\b[A-Z]{5}[0-9]{4}[A-Z]\\b")
     private val AADHAAR = Regex("(?<![0-9])([2-9][0-9]{3})[ -]?([0-9]{4})[ -]?([0-9]{4})(?![0-9])")
     private val PASSPORT = Regex("\\b[A-Z][0-9]{7}\\b")

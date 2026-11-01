@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.HowToVote
 import androidx.compose.material.icons.filled.MedicalServices
+import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material3.MaterialTheme
@@ -94,6 +95,7 @@ val categories = listOf(
     Category("education", "Education", Icons.Filled.School, Color(0xFFFFD36E), "Roll or register number"),
     Category("medical", "Medical", Icons.Filled.MedicalServices, Color(0xFFF2726F), "Record number"),
     Category("property", "Property", Icons.Filled.Home, Color(0xFFC9B38C), "Document number"),
+    Category("bills", "Bills and receipts", Icons.Filled.Receipt, Color(0xFFE3C567), "Bill number", true),
     Category("id", "Other ID", Icons.Filled.Badge, Color(0xFF9FB4D4), "ID number", true),
     Category("other", "Other", Icons.Filled.Description, Color(0xFF93A1B8)),
 )
