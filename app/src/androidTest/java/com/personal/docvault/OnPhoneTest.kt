@@ -39,13 +39,13 @@ class OnPhoneTest {
         store.create("test password".toCharArray())
 
         val text = Importer(context, store).readText(
-            drawCard("INCOME TAX DEPARTMENT", "Permanent Account Number", "ABCDE1234F"),
+            drawCard("INCOME TAX DEPARTMENT", "Permanent Account Number", "ABCPE1234F"),
         )
 
         assertTrue("OCR read: $text", "INCOME TAX" in text.uppercase())
         val found = Detector.detect(text)
         assertEquals("pan", found.category)
-        assertEquals("ABCDE1234F", found.number)
+        assertEquals("ABCPE1234F", found.number)
         root.deleteRecursively()
     }
 }

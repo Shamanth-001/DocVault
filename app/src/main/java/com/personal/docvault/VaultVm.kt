@@ -223,6 +223,7 @@ class VaultVm(app: Application) : AndroidViewModel(app) {
         scanJob?.cancel()
         scanJob = null
         bulkPreview = null
+        bulkPreviewPinned = false
         bulkItems.clear()
         photosLookedAt.clear()
         galleryPhotos = emptyList()
@@ -336,8 +337,11 @@ class VaultVm(app: Application) : AndroidViewModel(app) {
         withContext(Dispatchers.Main) { bulkAssign(groupKey, created.id, matched = true) }
     }
 
-    /** The photo shown while a thumbnail is being held down. */
+    /** The photo being looked at, either while held or opened with a tap. */
     var bulkPreview by mutableStateOf<Uri?>(null)
+
+    /** True when a tap opened the photo, so it stays until closed. */
+    var bulkPreviewPinned by mutableStateOf(false)
 
     suspend fun bulkPreviewBitmap(uri: Uri) = withContext(Dispatchers.IO) { importer.preview(uri) }
 

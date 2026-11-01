@@ -26,7 +26,7 @@ class VaultStoreTest {
     private fun store(name: String) = VaultStore(File(tmp.root, "$name/vault"), wrapper)
 
     private fun sample(blob: String = "") = Doc(
-        id = "1", category = "pan", title = "My PAN", number = "ABCDE1234F",
+        id = "1", category = "pan", title = "My PAN", number = "ABCPE1234F",
         attachments = if (blob.isEmpty()) emptyList() else listOf(Attachment(blob, "image", "a.jpg", "image/jpeg")),
     )
 
@@ -36,7 +36,7 @@ class VaultStoreTest {
         val blob = s.putBlob("SECRET-PHOTO-BYTES".toByteArray())
         s.upsert(sample(blob))
         val all = File(tmp.root, "a").walkTopDown().filter { it.isFile }.map { it.readBytes().toString(Charsets.ISO_8859_1) }
-        assertFalse(all.any { "ABCDE1234F" in it || "SECRET-PHOTO" in it || "My PAN" in it })
+        assertFalse(all.any { "ABCPE1234F" in it || "SECRET-PHOTO" in it || "My PAN" in it })
     }
 
     @Test fun reopensWithDeviceAndPassword() {
@@ -71,7 +71,7 @@ class VaultStoreTest {
         val other = store("b")
         other.importBackup(ByteArrayInputStream(backup), pw)
         other.rewrapDevice()
-        assertEquals("ABCDE1234F", other.docs.single().number)
+        assertEquals("ABCPE1234F", other.docs.single().number)
         assertArrayEquals(byteArrayOf(9, 9), other.getBlob(blob))
         other.lock()
         other.unlockWithDevice()
@@ -125,9 +125,9 @@ class DetectorTest {
     }
 
     @Test fun detectsPan() {
-        val d = Detector.detect("INCOME TAX DEPARTMENT\nPermanent Account Number\nABCDE1234F")
+        val d = Detector.detect("INCOME TAX DEPARTMENT\nPermanent Account Number\nABCPE1234F")
         assertEquals("pan", d.category)
-        assertEquals("ABCDE1234F", d.number)
+        assertEquals("ABCPE1234F", d.number)
     }
 
     @Test fun detectsPassportExpiry() {

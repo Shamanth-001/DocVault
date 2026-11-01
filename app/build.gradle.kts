@@ -18,8 +18,8 @@ android {
         applicationId = "com.personal.docvault"
         minSdk = 30
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.10"
+        versionCode = 14
+        versionName = "1.13"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }

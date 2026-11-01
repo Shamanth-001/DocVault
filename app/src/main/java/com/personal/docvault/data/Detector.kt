@@ -23,6 +23,32 @@ data class Classified(
 
 /** Works out what kind of Indian document some recognised text came from. */
 object Detector {
+    // A valid checksum isn't enough: about 1 in 10 random 12-digit numbers, such as UPI transaction
+    // numbers, pass it. An Aadhaar also needs wording that only appears on the card.
+    private val AADHAAR_SURE = Regex("\\bAADHAAR\\b|\\bAADHAR\\b|\\bUIDAI\\b|UNIQUE IDENTIFICATION|\\bVID\\b")
+    private val AADHAAR_HINTS = listOf(
+        Regex("GOVERNMENT OF INDIA|GOVT\\.? OF INDIA"),
+        Regex("\\bDOB\\b|DATE OF BIRTH|YEAR OF BIRTH"),
+        Regex("\\bMALE\\b|\\bFEMALE\\b"),
+        Regex("\\bADDRESS\\b"),
+    )
+    private val VOTER_PROOF = Regex(
+        "IDENTITY CARD|\\bEPIC\\b|ELECTOR'?S?\\s*NAME|ELECTORAL REGISTRATION OFFICER|ELECTORAL REGISTRATION$",
+    )
+    private val LICENCE_PROOF = Regex("\\bVALIDITY\\b|ISSUE DATE|DATE OF ISSUE|\\bDOB\\b|DATE OF BIRTH|\\bCOV\\b|ISSUED BY|NON-?TRANSPORT")
+    private val RC_PROOF = Regex("\\bCHASSIS\\b|\\bCH\\.?\\s*NO\\b|\\bENGINE\\b|\\bE\\.?\\s*NO\\b|\\bREGN\\b|OWNER|\\bFUEL\\b|\\bMAKER\\b")
+    private val PUC_PROOF = Regex("VALID\\s*(TILL|UPTO|UP\\s*TO)|\\bCERTIFICATE\\s*(NO|SL)|\\bREGISTRATION\\b|\\bHC\\b")
+    private val PASSPORT_PROOF = Regex("GIVEN NAME|\\bSURNAME\\b|PLACE OF ISSUE|PASSPORT NO")
+    private val INSURANCE_SIGNS = listOf(
+        Regex("POLICY\\s*(NO|NUMBER)"), Regex("POLICY\\s*PERIOD|PERIOD\\s*OF\\s*(INSURANCE|COVER)"),
+        Regex("CERTIFICATE\\s*OF\\s*INSURANCE|POLICY\\s*SCHEDULE"), Regex("SUM\\s*INSURED|\\bIDV\\b"),
+        Regex("\\bPREMIUM\\b"), Regex("\\bIRDA|\\bUIN\\b"), Regex("FORM\\s*51"),
+        Regex("INSURED\\s*NAME|NAME\\s*OF\\s*(THE\\s*)?INSURED"), Regex("REGISTRATION\\s*(MARK|NUMBER|NO)"),
+    )
+    private val PAYMENT_WORDS = listOf(
+        "UPI", "TRANSACTION", "TXN", "UTR", "RRN", "PAID TO", "PAYMENT SUCCESSFUL", "RECEIVED FROM",
+        "CREDITED", "DEBITED", "BANK REF", "GOOGLE PAY", "GPAY", "PHONEPE", "PAYTM", "BHIM", "NEFT", "IMPS",
+    )
     private val BILL_WORDS = listOf(
         "TAX INVOICE", "INVOICE", "BILL NO", "RECEIPT", "GSTIN", "TOTAL AMOUNT", "GRAND TOTAL",
         "AMOUNT PAID", "CASH MEMO", "WARRANTY", "HSN",
@@ -49,13 +75,17 @@ object Detector {
         if (text.length < 20) return null
         val d = detect(text)
         val holder = d.holder ?: passportName(text) ?: labelledName(text)
-        d.category?.let { return Classified(it, d.number, holder, d.expiry, confident = true) }
-
         val upper = text.uppercase()
-        fun hits(words: List<String>) = words.count { it in upper }
+        d.category?.let {
+            // A PAN pattern with no card wording could be any code, so leave it for the user to tick
+            val sure = it != "pan" || "INCOME TAX" in upper || "PERMANENT ACCOUNT" in upper
+            return Classified(it, d.number, holder, d.expiry, confident = sure)
+        }
+
+        fun hits(words: List<String>) = wordHits(upper, words)
         val guess = when {
-            hits(BILL_WORDS) >= 2 -> "bills"
-            hits(EDUCATION_WORDS) >= 1 -> "education"
+            hits(PAYMENT_WORDS) >= 2 || hits(BILL_WORDS) >= 2 -> "bills"
+            hits(EDUCATION_WORDS - "UNIVERSITY") >= 1 -> "education"
             hits(MEDICAL_WORDS) >= 1 -> "medical"
             hits(PROPERTY_WORDS) >= 1 -> "property"
             else -> return null
@@ -83,14 +113,21 @@ object Detector {
         return "$given $surname".trim().takeIf(::looksLikeName)
     }
 
-    private val PAN = Regex("\\b[A-Z]{5}[0-9]{4}[A-Z]\\b")
+    // The fourth PAN letter is always the holder type: P individual, C company, H family, and so on
+    private val PAN = Regex("\\b[A-Z]{3}[ABCFGHJLPT][A-Z][0-9]{4}[A-Z]\\b")
     private val AADHAAR = Regex("(?<![0-9])([2-9][0-9]{3})[ -]?([0-9]{4})[ -]?([0-9]{4})(?![0-9])")
     private val PASSPORT = Regex("\\b[A-Z][0-9]{7}\\b")
-    private val LICENCE = Regex("\\b[A-Z]{2}[0-9]{2}[ -]?[0-9]{4}[ -]?[0-9]{7}\\b|\\b[A-Z]{2}[0-9]{2}[ -]?[0-9]{11}\\b")
+    // State, RTO office, year of issue, then a 7-digit serial
+    private val LICENCE = Regex("\\b[A-Z]{2}[ -]?[0-9]{2}[ -]?(?:19|20)[0-9]{2}[ -]?[0-9]{7}\\b")
+    private val VEHICLE_NUMBER = Regex("\\b[A-Z]{2}[ -]?[0-9]{1,2}[ -]?[A-Z]{1,3}[ -]?[0-9]{4}\\b")
     private val VOTER = Regex("\\b[A-Z]{3}[0-9]{7}\\b")
     private val CARD_NUMBER = Regex("(?<![0-9])([0-9]{4})[ -]?([0-9]{4})[ -]?([0-9]{4})[ -]?([0-9]{4})(?![0-9])")
     private val POLICY_NUMBER = Regex("(?i)policy\\s*(?:no|number)\\.?\\s*[:\\-]?\\s*([A-Z0-9][A-Z0-9/\\-]{5,})")
-    private val CARD_WORDS = Regex("VALID\\s*(THRU|THROUGH)|GOOD\\s*(THRU|THROUGH)|DEBIT|CREDIT|RUPAY|VISA|MASTERCARD")
+    private val CARD_WORDS = Regex("VALID\\s*(THRU|THROUGH)|GOOD\\s*(THRU|THROUGH)|\\bDEBIT\\b|\\bCREDIT\\b|\\bRUPAY\\b|\\bVISA\\b|\\bMASTERCARD\\b")
+    private val ELECTOR_WORD = Regex("\\bELECTORS?\\b|\\bELECTORAL\\b")
+
+    private fun wordHits(text: String, words: List<String>) =
+        words.count { Regex("\\b" + Regex.escape(it) + "\\b").containsMatchIn(text) }
 
     // Wording seen on Indian insurance schedules, licences, RCs and bank cards
     private val STRONG_LABEL = Regex(
@@ -118,9 +155,13 @@ object Detector {
     fun detect(text: String): Detected {
         val upper = text.uppercase()
         val pan = PAN.find(upper)?.value
+        val isPayment = wordHits(upper, PAYMENT_WORDS) > 0
         val aadhaar = AADHAAR.findAll(text)
             .map { it.groupValues[1] + it.groupValues[2] + it.groupValues[3] }
             .firstOrNull(::isValidAadhaar)
+            ?.takeIf {
+                !isPayment && (AADHAAR_SURE.containsMatchIn(upper) || AADHAAR_HINTS.count { h -> h.containsMatchIn(upper) } >= 2)
+            }
         val card = CARD_NUMBER.findAll(text)
             .map { it.groupValues.drop(1).joinToString("") }
             .firstOrNull(::passesLuhn)
@@ -128,22 +169,26 @@ object Detector {
         val passportExpiry = passportCodeExpiry(text)
 
         return when {
-            passportExpiry != null || ("REPUBLIC OF INDIA" in upper && "PASSPORT" in upper) || "P<IND" in upper ->
+            passportExpiry != null || "P<IND" in upper ||
+                ("REPUBLIC OF INDIA" in upper && "PASSPORT" in upper &&
+                    (PASSPORT.containsMatchIn(upper) || PASSPORT_PROOF.containsMatchIn(upper))) ->
                 Detected("passport", PASSPORT.find(upper)?.value, null, passportExpiry ?: expiry(text))
-            "DRIVING LICEN" in upper ->
+            "DRIVING LICEN" in upper && (LICENCE.containsMatchIn(upper) || LICENCE_PROOF.containsMatchIn(upper)) ->
                 Detected("licence", LICENCE.find(upper)?.value, null, expiry(text))
-            "ELECTION COMMISSION" in upper || "ELECTOR" in upper ->
+            (("ELECTION COMMISSION" in upper || ELECTOR_WORD.containsMatchIn(upper)) &&
+                (VOTER.containsMatchIn(upper) || VOTER_PROOF.containsMatchIn(upper))) ->
                 Detected("voter", VOTER.find(upper)?.value)
-            "REGISTRATION CERTIFICATE" in upper || "CERTIFICATE OF REGISTRATION" in upper ||
-                "POLLUTION UNDER CONTROL" in upper ->
-                Detected("vehicle", null, null, expiry(text))
+            ("REGISTRATION CERTIFICATE" in upper || "CERTIFICATE OF REGISTRATION" in upper) && RC_PROOF.containsMatchIn(upper) ->
+                Detected("vehicle", VEHICLE_NUMBER.find(upper)?.value, null, expiry(text))
+            "POLLUTION UNDER CONTROL" in upper && PUC_PROOF.containsMatchIn(upper) ->
+                Detected("vehicle", VEHICLE_NUMBER.find(upper)?.value, null, expiry(text))
             isCard -> Detected("card", card!!.chunked(4).joinToString(" "), null, expiry(text, isCard = true))
-            "INSURANCE" in upper && ("POLICY" in upper || "CERTIFICATE" in upper) ->
+            "INSURANCE" in upper && INSURANCE_SIGNS.count { it.containsMatchIn(upper) } >= 2 ->
                 Detected("insurance", POLICY_NUMBER.find(text)?.groupValues?.get(1), null, expiry(text))
             pan != null && ("INCOME TAX" in upper || "PERMANENT ACCOUNT" in upper) ->
                 Detected("pan", pan, panName(text))
             aadhaar != null -> Detected("aadhaar", formatAadhaar(aadhaar), aadhaarName(text))
-            pan != null -> Detected("pan", pan, panName(text))
+            pan != null && !isPayment -> Detected("pan", pan, panName(text))
             else -> Detected(expiry = expiry(text))
         }
     }

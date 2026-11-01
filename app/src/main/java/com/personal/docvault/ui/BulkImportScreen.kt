@@ -13,7 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,8 +65,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
@@ -141,12 +145,43 @@ fun BulkImportScreen(vm: VaultVm) {
 @Composable
 private fun HeldPreview(vm: VaultVm, uri: Uri) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, uri) { value = vm.bulkPreviewBitmap(uri) }
+    var scale by remember(uri) { mutableStateOf(1f) }
+    var offset by remember(uri) { mutableStateOf(Offset.Zero) }
+
+    fun close() {
+        vm.bulkPreviewPinned = false
+        vm.bulkPreview = null
+    }
+
+    if (vm.bulkPreviewPinned) BackHandler(onBack = ::close)
+
     Box(Modifier.fillMaxSize().background(Color(0xF2000000)), contentAlignment = Alignment.Center) {
         val shown = bitmap
         if (shown != null) {
-            Image(shown.asImageBitmap(), "Full photo", Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit)
+            Image(
+                shown.asImageBitmap(), "Full photo",
+                Modifier.fillMaxSize().padding(8.dp)
+                    .pointerInput(uri) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(1f, 6f)
+                            offset = if (scale == 1f) Offset.Zero else offset + pan
+                        }
+                    }
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+                contentScale = ContentScale.Fit,
+            )
         } else {
             CircularProgressIndicator()
+        }
+        if (vm.bulkPreviewPinned) {
+            IconButton(::close, Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)) {
+                Icon(Icons.Filled.Close, "Close", tint = Color.White)
+            }
         }
     }
 }
@@ -298,7 +333,7 @@ private fun Review(vm: VaultVm) {
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp)) {
             item {
                 Text(
-                    "Check each one, and tick only what you want to keep. Hold a photo to see it full size.",
+                    "Check each one, and tick only what you want to keep. Tap a photo to open it and pinch to zoom, or hold it for a quick look.",
                     Modifier.padding(horizontal = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 TextButton({ addingPerson = true }) { Text("Add a family member") }
@@ -389,22 +424,28 @@ private fun Thumb(vm: VaultVm, uri: Uri) {
     val thumb by produceState<android.graphics.Bitmap?>(null, uri) {
         value = withContext(Dispatchers.IO) { vm.bulkThumbnail(uri) }
     }
-    val modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp)).pointerInput(uri) {
-        // Shows the photo for as long as the finger stays down
-        awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            val held = awaitLongPressOrCancellation(down.id)
-            if (held != null) {
+    val modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp))
+        .clickable {
+            vm.bulkPreviewPinned = true
+            vm.bulkPreview = uri
+        }
+        .pointerInput(uri) {
+            // Stays until the finger lifts, wherever it slides, and stops the list scrolling meanwhile
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val held = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
+                held.consume()
                 vm.bulkPreview = uri
                 try {
-                    held.consume()
-                    waitForUpOrCancellation()
+                    do {
+                        val event = awaitPointerEvent()
+                        event.changes.forEach { it.consume() }
+                    } while (event.changes.any { it.pressed })
                 } finally {
                     vm.bulkPreview = null
                 }
             }
         }
-    }
     thumb?.let { Image(it.asImageBitmap(), "Document photo", modifier, contentScale = ContentScale.Crop) }
         ?: Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant))
 }

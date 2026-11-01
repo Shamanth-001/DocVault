@@ -65,14 +65,60 @@ class PersonMatcherTest {
 }
 
 class ClassifyTest {
+    // 234123412346 passes the Aadhaar checksum, like about 1 in 10 random 12-digit numbers
+    @Test fun upiPaymentIsNeverAnAadhaar() {
+        val c = Detector.classify("Google Pay\nPaid to Some Shop\nUPI transaction ID\n234123412346")!!
+        assertEquals("bills", c.category)
+        assertNull(c.number)
+        assertFalse(c.confident)
+    }
+
+    @Test fun bankPaymentMessageIsNeverAnAadhaar() {
+        val c = Detector.classify("Rs.500 debited from your account\nUTR 234123412346\nNEFT transfer")
+        assertTrue(c == null || c.category != "aadhaar")
+    }
+
+    @Test fun bareValidNumberIsNotAnAadhaar() {
+        assertNull(Detector.classify("Order number 234123412346 is on the way to you"))
+    }
+
+    @Test fun realAadhaarStillWorksWithFewWords() {
+        assertEquals("aadhaar", Detector.classify("Government of India\nDOB: 01/01/2000\n2341 2341 2346")!!.category)
+        assertEquals("aadhaar", Detector.classify("Unique Identification Authority of India\n2341 2341 2346")!!.category)
+    }
+
+    @Test fun codeOnALaptopIsNotAVoterId() {
+        assertNull(Detector.classify("const selector = document.querySelector('#main')\nCSS Selector ABC1234567"))
+    }
+
+    @Test fun realVoterIdStillWorks() {
+        assertEquals("voter", Detector.classify("ELECTION COMMISSION OF INDIA\nElector Photo Identity Card\nABC1234567")!!.category)
+    }
+
+    @Test fun insuranceWebpageIsNotAPolicy() {
+        assertNull(Detector.classify("Read our insurance blog and privacy policy for more information"))
+    }
+
+    @Test fun wordInsideALongerWordDoesNotCount() {
+        assertNull(Detector.classify("Enroll now and get accredited in just two weeks"))
+    }
+
+    @Test fun universityOnAWebpageIsNotAnEducationDocument() {
+        assertNull(Detector.classify("Welcome to the university home page and news updates"))
+    }
+
+    @Test fun panPatternWithoutCardWordsStartsUnticked() {
+        assertFalse(Detector.classify("Some code value here ABCPE1234F in the output")!!.confident)
+    }
+
     @Test fun knownCardIsConfident() {
-        val c = Detector.classify("INCOME TAX DEPARTMENT\nPermanent Account Number\nABCDE1234F")!!
+        val c = Detector.classify("INCOME TAX DEPARTMENT\nPermanent Account Number\nABCPE1234F")!!
         assertEquals("pan", c.category)
         assertTrue(c.confident)
     }
 
     @Test fun billNeedsTwoSignals() {
-        val c = Detector.classify("ACME STORE\nTAX INVOICE\nGSTIN 29ABCDE1234F1Z5\nGrand Total 1200")!!
+        val c = Detector.classify("ACME STORE\nTAX INVOICE\nGSTIN 29ABCPE1234F1Z5\nGrand Total 1200")!!
         assertEquals("bills", c.category)
         assertFalse(c.confident)
     }
